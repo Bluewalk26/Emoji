@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Emoji Art Pro - Photoshop Style</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@1/index.js"></script>
+
+    <style>
+        :root {
+            --bg-dark: #121212;
+            --panel-bg: #1e1e1e;
+            --border-color: #333;
+            --accent: #007aff;
+            --text-color: #e0e0e0;
+            --radius: 12px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background-color: var(--bg-dark); color: var(--text-color); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+        /* Toolbar */
+        .toolbar {
+            height: 60px; background-color: var(--panel-bg); border-bottom: 1px solid var(--border-color);
+            display: flex; align-items: center; justify-content: space-between; padding: 0 20px;
+        }
+        .btn {
+            background: #333; color: white; border: none; padding: 8px 14px; border-radius: 6px;
+            cursor: pointer; font-size: 13px; font-weight: 500; transition: 0.2s;
+        }
+        .btn:hover { background: #444; }
+        .btn.primary { background: var(--accent); }
+        .btn.danger { background: #ff3b30; }
+
+        /* Layout */
+        .main-layout { display: flex; flex: 1; height: calc(100vh - 60px); }
+        
+        /* Left Panel: Emoji */
+        .left-panel { width: 320px; border-right: 1px solid var(--border-color); background: var(--panel-bg); display: flex; flex-direction: column; }
+        emoji-picker { width: 100%; height: 100%; --background: var(--panel-bg); }
+
+        /* Center Canvas */
+        .workspace { flex: 1; display: flex; justify-content: center; align-items: center; background: #111; overflow: auto; position: relative; }
+        .canvas-holder { box-shadow: 0 0 50px rgba(0,0,0,0.5); border-radius: 4px; overflow: hidden; background-image: conic-gradient(#222 90deg, #2a2a2a 90deg 180deg, #222 180deg 270deg, #2a2a2a 270deg); background-size: 20px 20px; }
+
+        /* Right Panel: Photoshop Layers */
+        .right-panel { width: 300px; border-left: 1px solid var(--border-color); background: var(--panel-bg); display: flex; flex-direction: column; }
+        .panel-header { padding: 15px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+        
+        .layer-stack { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column-reverse; gap: 5px; justify-content: flex-end; }
+        .layer-item {
+            background: #2a2a2a; padding: 10px; border-radius: var(--radius);
+            display: flex; align-items: center; gap: 10px; border: 2px solid transparent; cursor: pointer;
+        }
+        .layer-item.active { border-color: var(--accent); background: #353535; }
+        .layer-item input {
+            background: transparent; border: none; color: white; flex: 1; pointer-events: none;
+        }
+        .layer-item.active input { pointer-events: auto; outline: 1px solid #555; }
+        
+        .layer-actions { padding: 15px; border-top: 1px solid var(--border-color); display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+        /* Controls for iPad */
+        .canvas-container { margin: 0 auto; }
+    </style>
+</head>
+<body>
+
+    <div class="toolbar">
+        <div style="display:flex; gap:15px; align-items:center;">
+            <h2 style="font-size:18px;">Emoji Art <span style="color:var(--accent)">PRO</span></h2>
+            <input type="color" id="canvasBg" value="#ffffff" title="Màu nền" style="width:30px;height:30px;border:none;background:none;cursor:pointer;">
+        </div>
+        <div style="display:flex; gap:10px;">
+            <button class="btn" onclick="exportPNG()">Xuất PNG</button>
+            <button class="btn danger" onclick="clearAll()">Xóa hết</button>
+        </div>
+    </div>
+
+    <div class="main-layout">
+        <div class="panel left-panel">
+            <emoji-picker class="dark"></emoji-picker>
+        </div>
+
+        <div class="workspace">
+            <div class="canvas-holder">
+                <canvas id="c"></canvas>
+            </div>
+        </div>
+
+        <div class="panel right-panel">
+            <div class="panel-header">
+                <span>Lớp (Layers)</span>
+                <button class="btn primary" onclick="addNewLayer()">+ Lớp mới</button>
+            </div>
+            
+            <div class="layer-stack" id="layerStack">
+                <!-- Layers render here -->
+            </div>
+
+            <div class="layer-actions">
+                <button class="btn" onclick="mergeSelected()" id="mergeBtn">Nhập lớp xuống</button>
+                <button class="btn danger" onclick="deleteLayer()">Xóa lớp</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = new fabric.Canvas('c', {
+            width: 800,
+            height: 800,
+            backgroundColor: '#ffffff',
+            preserveObjectStacking: true // Quan trọng: Giữ đúng thứ tự layer
+        });
+
+        // Cấu hình Handle (nút xoay/kéo) to cho iPad
+        fabric.Object.prototype.set({
+            cornerSize: 24,
+            cornerStyle: 'circle',
+            cornerColor: '#007aff',
+            borderColor: '#007aff',
+            transparentCorners: false,
+            padding: 10
+        });
+
+        let layers = []; // {id: string, name: string, visible: boolean}
+        let activeLayerId = null;
+
+        // 1. KHỞI TẠO LAYER ĐẦU TIÊN
+        function init() {
+            addNewLayer("Nền");
+            renderLayers();
+        }
+
+        function addNewLayer(name = "") {
+            const id = 'layer_' + Date.now();
+            const layerName = name || "Lớp " + (layers.length + 1);
+            layers.push({ id, name: layerName, visible: true });
+            activeLayerId = id;
+            renderLayers();
+        }
+
+        // 2. RENDER BẢNG LAYER (Photoshop Style)
+        function renderLayers() {
+            const stack = document.getElementById('layerStack');
+            stack.innerHTML = '';
+
+            layers.forEach((layer, index) => {
+                const item = document.createElement('div');
+                item.className = `layer-item ${layer.id === activeLayerId ? 'active' : ''}`;
+                item.onclick = () => {
+                    activeLayerId = layer.id;
+                    renderLayers();
+                };
+
+                const visibilityBtn = document.createElement('span');
+                visibilityBtn.innerText = layer.visible ? '👁️' : '🚫';
+                visibilityBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    toggleVisibility(layer.id);
+                };
+
+                const nameInput = document.createElement('input');
+                nameInput.value = layer.name;
+                nameInput.onchange = (e) => { layer.name = e.target.value; };
+
+                item.append(visibilityBtn, nameInput);
+                stack.appendChild(item);
+            });
+
+            // Update nút merge (không merge được nếu là layer cuối)
+            document.getElementById('mergeBtn').disabled = layers.length < 2;
+        }
+
+        // 3. THÊM EMOJI VÀO LAYER ĐANG CHỌN
+        document.querySelector('emoji-picker').addEventListener('emoji-click', event => {
+            if (!activeLayerId) {
+                alert("Vui lòng chọn hoặc tạo một Layer trước!");
+                return;
+            }
+
+            const emoji = event.detail.unicode;
+            const textObj = new fabric.Text(emoji, {
+                fontSize: 100,
+                left: canvas.width / 2,
+                top: canvas.height / 2,
+                originX: 'center',
+                originY: 'center',
+                layerId: activeLayerId // Gắn ID layer vào object
+            });
+
+            canvas.add(textObj);
+            canvas.setActiveObject(textObj);
+            reorderCanvasByLayers();
+        });
+
+        // 4. SẮP XẾP THỨ TỰ HIỂN THỊ (Z-INDEX)
+        function reorderCanvasByLayers() {
+            // Duyệt qua danh sách layers từ dưới lên trên
+            layers.forEach(layer => {
+                const layerObjects = canvas.getObjects().filter(obj => obj.layerId === layer.id);
+                layerObjects.forEach(obj => {
+                    obj.visible = layer.visible;
+                    canvas.bringToFront(obj);
+                });
+            });
+            canvas.renderAll();
+        }
+
+        // 5. MERGE LAYERS (Gộp lớp)
+        function mergeSelected() {
+            const currentIndex = layers.findIndex(l => l.id === activeLayerId);
+            if (currentIndex <= 0) return; // Không có lớp bên dưới để gộp
+
+            const targetLayer = layers[currentIndex - 1]; // Lớp bên dưới
+            const currentLayer = layers[currentIndex];
+
+            // Chuyển tất cả object của lớp hiện tại sang lớp dưới
+            canvas.getObjects().forEach(obj => {
+                if (obj.layerId === currentLayer.id) {
+                    obj.layerId = targetLayer.id;
+                }
+            });
+
+            // Xóa lớp hiện tại khỏi mảng
+            layers.splice(currentIndex, 1);
+            activeLayerId = targetLayer.id;
+            
+            renderLayers();
+            reorderCanvasByLayers();
+        }
+
+        // 6. XỬ LÝ KHÁC
+        function toggleVisibility(id) {
+            const layer = layers.find(l => l.id === id);
+            layer.visible = !layer.visible;
+            renderLayers();
+            reorderCanvasByLayers();
+        }
+
+        function deleteLayer() {
+            if (layers.length <= 1) return;
+            if (!confirm("Xóa toàn bộ Emoji thuộc lớp này?")) return;
+
+            const objs = canvas.getObjects().filter(obj => obj.layerId === activeLayerId);
+            objs.forEach(obj => canvas.remove(obj));
+
+            layers = layers.filter(l => l.id !== activeLayerId);
+            activeLayerId = layers[layers.length - 1].id;
+            
+            renderLayers();
+            canvas.renderAll();
+        }
+
+        function clearAll() {
+            if (confirm("Xóa sạch canvas?")) {
+                canvas.clear();
+                layers = [];
+                addNewLayer("Nền");
+                canvas.setBackgroundColor('#ffffff', canvas.renderAll.bind(canvas));
+            }
+        }
+
+        function exportPNG() {
+            canvas.discardActiveObject();
+            canvas.renderAll();
+            const dataURL = canvas.toDataURL({ format: 'png', multiplier: 2 });
+            const link = document.createElement('a');
+            link.download = 'emoji-pro-art.png';
+            link.href = dataURL;
+            link.click();
+        }
+
+        // Đổi màu nền canvas
+        document.getElementById('canvasBg').addEventListener('input', (e) => {
+            canvas.setBackgroundColor(e.target.value, canvas.renderAll.bind(canvas));
+        });
+
+        // Phím tắt xóa vật thể
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                const active = canvas.getActiveObjects();
+                canvas.remove(...active);
+                canvas.discardActiveObject();
+            }
+        });
+
+        init();
+    </script>
+</body>
+</html>
